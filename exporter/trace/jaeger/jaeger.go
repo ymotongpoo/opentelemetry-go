@@ -16,14 +16,14 @@ package jaeger
 
 import (
 	"context"
-	"log"
+	"sync"
 
-	"google.golang.org/api/support/bundler"
 	"google.golang.org/grpc/codes"
 
 	"go.opentelemetry.io/api/core"
 	gen "go.opentelemetry.io/exporter/trace/jaeger/internal/gen-go/jaeger"
 	"go.opentelemetry.io/sdk/export"
+	sdktrace "go.opentelemetry.io/sdk/trace"
 )
 
 const defaultServiceName = "OpenTelemetry"
@@ -80,13 +80,6 @@ func NewExporter(endpointOption EndpointOption, opts ...Option) (*Exporter, erro
 		opt(&o)
 	}
 
-	onError := func(err error) {
-		if o.OnError != nil {
-			o.OnError(err)
-			return
-		}
-		log.Printf("Error when uploading spans to Jaeger: %v", err)
-	}
 	service := o.Process.ServiceName
 	if service == "" {
 		service = defaultServiceName
@@ -101,21 +94,9 @@ func NewExporter(endpointOption EndpointOption, opts ...Option) (*Exporter, erro
 			ServiceName: service,
 			Tags:        tags,
 		},
-	}
-	bundler := bundler.NewBundler((*gen.Span)(nil), func(bundle interface{}) {
-		if err := e.upload(bundle.([]*gen.Span)); err != nil {
-			onError(err)
-		}
-	})
-
-	// Set BufferedByteLimit with the total number of spans that are permissible to be held in memory.
-	// This needs to be done since the size of messages is always set to 1. Failing to set this would allow
-	// 1G messages to be held in memory since that is the default value of BufferedByteLimit.
-	if o.BufferMaxCount != 0 {
-		bundler.BufferedByteLimit = o.BufferMaxCount
+		onError: o.OnError,
 	}
 
-	e.bundler = bundler
 	return e, nil
 }
 
@@ -138,17 +119,20 @@ type Tag struct {
 
 // Exporter is an implementation of trace.Exporter that uploads spans to Jaeger.
 type Exporter struct {
-	process  *gen.Process
-	bundler  *bundler.Bundler
-	uploader batchUploader
+	process   *gen.Process
+	uploader  batchUploader
+	onError   func(err error)
+	processor *sdktrace.SimpleSpanProcessor
+	once      sync.Once
 }
 
 var _ export.SpanSyncer = (*Exporter)(nil)
 
 // ExportSpan exports a SpanData to Jaeger.
 func (e *Exporter) ExportSpan(ctx context.Context, d *export.SpanData) {
-	_ = e.bundler.Add(spanDataToThrift(d), 1)
-	// TODO(jbd): Handle oversized bundlers.
+	if err := e.upload([]*gen.Span{spanDataToThrift(d)}); err != nil {
+		e.onError(err)
+	}
 }
 
 func spanDataToThrift(data *export.SpanData) *gen.Span {
@@ -306,11 +290,17 @@ func attributeToTag(key string, a interface{}) *gen.Tag {
 	return tag
 }
 
-// Flush waits for exported trace spans to be uploaded.
-//
-// This is useful if your program is ending and you do not want to lose recent spans.
-func (e *Exporter) Flush() {
-	e.bundler.Flush()
+func (e *Exporter) RegisterSpanProcessor() {
+	e.once.Do(func() {
+		e.processor = sdktrace.NewSimpleSpanProcessor(e)
+		sdktrace.RegisterSpanProcessor(e.processor)
+	})
+}
+
+// Shutdown unregisters the SimpleSpanProcessor from e.
+func (e *Exporter) Shutdown() {
+	sdktrace.UnregisterSpanProcessor(e.processor)
+	e.processor = nil
 }
 
 func (e *Exporter) upload(spans []*gen.Span) error {

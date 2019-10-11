@@ -40,9 +40,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Wrap exporter with SimpleSpanProcessor and register the processor.
-	ssp := trace.NewSimpleSpanProcessor(exporter)
-	trace.RegisterSpanProcessor(ssp)
+	exporter.RegisterSpanProcessor()
 
 	// For demoing purposes, always sample. In a production application, you should
 	// configure this to a trace.ProbabilitySampler set at the desired
@@ -53,7 +51,7 @@ func main() {
 	bar(ctx)
 	span.End()
 
-	exporter.Flush()
+	exporter.Shutdown()
 }
 
 func bar(ctx context.Context) {
