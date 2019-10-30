@@ -19,11 +19,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
 	traceapi "cloud.google.com/go/trace/apiv2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/googleapi/transport"
 	"google.golang.org/api/option"
 
 	"go.opentelemetry.io/api/key"
@@ -159,6 +161,20 @@ func WithTraceClientOptions(opts []option.ClientOption) func(o *options) {
 func WithContext(ctx context.Context) func(o *options) {
 	return func(o *options) {
 		o.Context = ctx
+	}
+}
+
+// WithAPIKey sets apikey as the credential for Stackdriver (Google Cloud Platform).
+// This option is prior to the default credential detection process.
+func WithAPIKey(apikey string) func(o *options) {
+	return func(o *options) {
+		client := &http.Client{
+			Transport: &transport.APIKey{Key: apikey},
+		}
+		o.TraceClientOptions = append(o.TraceClientOptions,
+			option.WithAPIKey(apikey),
+			option.WithHTTPClient(client),
+		)
 	}
 }
 

@@ -30,11 +30,13 @@ import (
 
 func initTracer() {
 	projectID := os.Getenv("PROJECT_ID")
+	apikey := os.Getenv("API_KEY")
 
 	// Create Stackdriver exporter to be able to retrieve
 	// the collected spans.
 	exporter, err := stackdriver.NewExporter(
 		stackdriver.WithProjectID(projectID),
+		stackdriver.WithAPIKey(apikey),
 	)
 	if err != nil {
 		log.Fatal(err)
